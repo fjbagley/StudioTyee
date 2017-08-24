@@ -73,7 +73,12 @@ class QuestUpdate(UpdateView):
 
 
 @login_required
-def quest_list(request, quest_id=None, submission_id=None):
+def quest_list2(request, quest_id=None, submission_id=None):
+    return quest_list(request, quest_id, submission_id, template="quest_manager/quests2.html")
+
+
+@login_required
+def quest_list(request, quest_id=None, submission_id=None, template="quest_manager/quests.html"):
     available_quests = []
     in_progress_submissions = []
     completed_submissions = []
@@ -167,7 +172,7 @@ def quest_list(request, quest_id=None, submission_id=None):
         "completed_tab_active": completed_tab_active,
         "past_tab_active": past_tab_active,
     }
-    return render(request, "quest_manager/quests.html", context)
+    return render(request, template, context)
 
 
 @login_required
