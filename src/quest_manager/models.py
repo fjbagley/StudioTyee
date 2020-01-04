@@ -1,13 +1,14 @@
 import uuid
-from datetime import time
+import json
+from datetime import time, date
 
 from django.conf import settings
-from django.contrib.auth.models import User
 from django.contrib.contenttypes.fields import GenericRelation, GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ObjectDoesNotExist, MultipleObjectsReturned
 from django.db import models
 from django.db.models import Q, Max, Sum
+from django.shortcuts import get_object_or_404
 from django.templatetags.static import static
 from django.urls import reverse
 from django.utils import timezone
@@ -15,8 +16,8 @@ from djconfig import config
 
 from badges.models import BadgeAssertion
 from comments.models import Comment
-from prerequisites.models import Prereq, IsAPrereqMixin
-
+from prerequisites.models import Prereq, IsAPrereqMixin, PrereqAllConditionsMet
+from utilities.models import ImageResource
 
 # from django.contrib.contenttypes.models import ContentType
 # from django.contrib.contenttypes import generic
@@ -61,7 +62,7 @@ class XPItem(models.Model):
     sort_order = models.IntegerField(default=0)
     max_repeats = models.IntegerField(default=0, help_text='0 = not repeatable; -1 = unlimited repeats')
     hours_between_repeats = models.PositiveIntegerField(default=0)
-    date_available = models.DateField(default=timezone.now)  # timezone aware!
+    date_available = models.DateField(default=date.today)  # timezone aware!
     time_available = models.TimeField(default=time().min)  # midnight local time
     date_expired = models.DateField(blank=True, null=True,
                                     help_text='If both Date and Time expired are blank, then the quest never expires')
@@ -130,8 +131,8 @@ class XPItem(models.Model):
         """This quest should be in the user's available tab.  Doesn't check exactly, but same criteria.
         Should probably put criteria in one spot and share.  See QuestManager.get_available()"""
         return self.active and \
-               QuestSubmission.objects.not_submitted_or_inprogress(user, self) and \
-               Prereq.objects.all_conditions_met(self, user)
+            QuestSubmission.objects.not_submitted_or_inprogress(user, self) and \
+            Prereq.objects.all_conditions_met(self, user)
 
     def is_repeatable(self):
         return self.max_repeats != 0
@@ -189,10 +190,7 @@ class QuestQuerySet(models.query.QuerySet):
         :param user:
         :return: A queryset of the prerequisite's that have been met so far
         """
-        pk_met_list = [
-            obj.pk for obj in self
-            if Prereq.objects.all_conditions_met(obj, user)
-            ]
+        pk_met_list = self.get_pk_met_list(user) or [0]
         return self.filter(pk__in=pk_met_list)
 
     def get_list_not_submitted_or_inprogress(self, user):
@@ -205,6 +203,15 @@ class QuestQuerySet(models.query.QuerySet):
             return self
         else:
             return self.filter(editor=user.id)
+
+    def get_pk_met_list(self, user):
+        model_name = '{}.{}'.format(Quest._meta.app_label, Quest._meta.model_name)
+        pk_met_list = PrereqAllConditionsMet.objects.filter(user=user, model_name=model_name).first()
+        if not pk_met_list:
+            from prerequisites.tasks import update_quest_conditions_for_user
+            pk_met_list = update_quest_conditions_for_user(user.id)
+            pk_met_list = PrereqAllConditionsMet.objects.get(id=pk_met_list)
+        return json.loads(pk_met_list.ids)
 
 
 class QuestManager(models.Manager):
@@ -260,11 +267,12 @@ class Quest(XPItem, IsAPrereqMixin):
                                                              "having joined a course.  E.g. for quests you might "
                                                              "still want available to past students.")
     # categories = models.ManyToManyField(Category, blank=True)
-    specific_teacher_to_notify = models.ForeignKey(settings.AUTH_USER_MODEL, limit_choices_to={'is_staff': True},
-                                                blank=True, null=True,
-                                                help_text="Notifications related to this quest will be sent to this "
-                                                          "teacher even if they do not teach the student.",
-                                                on_delete = models.SET_NULL)
+    specific_teacher_to_notify = models.ForeignKey(
+        settings.AUTH_USER_MODEL, limit_choices_to={'is_staff': True}, blank=True, null=True,
+        help_text="Notifications related to this quest will be sent to this teacher "
+                  "even if they do not teach the student.",
+        on_delete=models.SET_NULL
+    )
     campaign = models.ForeignKey(Category, blank=True, null=True, on_delete=models.SET_NULL)
     common_data = models.ForeignKey(CommonData, blank=True, null=True, on_delete=models.SET_NULL)
     instructions = models.TextField(blank=True, verbose_name='Quest Details')
@@ -277,7 +285,7 @@ class Quest(XPItem, IsAPrereqMixin):
                                help_text='Provides a student TA access to work on the draft of this quest.',
                                on_delete=models.SET_NULL)
 
-    import_id = models.UUIDField(blank=True, null=True, default=uuid.uuid4,  unique=True,
+    import_id = models.UUIDField(blank=True, null=True, default=uuid.uuid4, unique=True,
                                  help_text="Only edit this if you want to link to a quest in another system so that "
                                            "when importing from that other system, it will update this quest. "
                                            "Otherwise do not edit this or it will break existing links!")
@@ -297,13 +305,21 @@ class Quest(XPItem, IsAPrereqMixin):
 
     objects = QuestManager()
 
+    @classmethod
+    def get_model_name(cls):
+        return '{}.{}'.format(cls._meta.app_label, cls._meta.model_name)
+
     def get_icon_url(self):
         if self.icon and hasattr(self.icon, 'url'):
             return self.icon.url
         if self.campaign and self.campaign.icon and hasattr(self.campaign.icon, 'url'):
             return self.campaign.icon.url
-        else:
-            return static('img/default_icon.png')
+
+        if config.hs_default_icon:
+            icon = get_object_or_404(ImageResource, pk=config.hs_default_icon)
+            return icon.image.url
+
+        return static('img/default_icon.png')            
 
     def prereqs(self):
         return Prereq.objects.all_parent(self)
@@ -347,9 +363,6 @@ class Quest(XPItem, IsAPrereqMixin):
             return True
         else:
             return user == self.editor and not self.visible_to_students
-
-
-
 
 
 # class Feedback(models.Model):
@@ -586,8 +599,7 @@ class QuestSubmissionManager(models.Manager):
         :return: True if the quest should appear on the user's available quests tab
         See: QuestManager.get_available()
         """
-        return self.not_submitted_or_inprogress(user, quest) \
-               and True
+        return self.not_submitted_or_inprogress(user, quest)
 
     def not_submitted_or_inprogress(self, user, quest):
         """
@@ -711,6 +723,7 @@ class QuestSubmission(models.Model):
                                    related_name="quest_submission_flagged_by",
                                    help_text="flagged by a teacher for follow up",
                                    on_delete=models.SET_NULL)
+    draft_text = models.TextField(null=True, blank=True)
 
     class Meta:
         ordering = ["time_approved", "time_completed"]
@@ -746,6 +759,7 @@ class QuestSubmission(models.Model):
         # when calculating repeatable quests
         if self.first_time_completed is None:
             self.first_time_completed = self.time_completed
+        self.draft_text = None  # clear draft stuff
         self.save()
 
     def mark_approved(self, transfer=False):

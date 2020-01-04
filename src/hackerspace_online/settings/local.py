@@ -23,22 +23,37 @@ SECRET_KEY = 'notverysecretkey...gimmebetteroneinproduction'
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-INTERNAL_IPS = ['127.0.0.1', ]
+INTERNAL_IPS = ['127.0.0.1', '0.0.0.0']
 
 ALLOWED_HOSTS = []
 
-EMAIL_HOST = 'smtp.gmail.com'
-EMAIL_HOST_USER = 'timberline.hackerspace@gmail.com'
-EMAIL_HOST_PASSWORD =""
-EMAIL_PORT = 587
-EMAIL_USE_TLS = True
+EMAIL_BACKEND = 'django.core.mail.backends.filebased.EmailBackend'
+EMAIL_FILE_PATH = 'sentmail/' # change this to a proper location
+
+POSTMAN_MAILER_APP = 'django.core.mail'
+# EMAIL_HOST = 'smtp.gmail.com'
+# EMAIL_HOST_USER = 'timberline.hackerspace@gmail.com'
+# EMAIL_HOST_PASSWORD = ''
+# EMAIL_PORT = 587
+# EMAIL_USE_TLS = True
+# DEFAULT_FROM_EMAIL = "Timberline Hackerspace"
 
 # Database
 # https://docs.djangoproject.com/en/1.8/ref/settings/#databases
+POSTGRES_HOST = os.environ.get('POSTGRES_HOST', '127.0.0.1')
+POSTGRES_PORT = os.environ.get('POSTGRES_PORT', '5432')
+
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': os.path.join(BASE_DIR, 'db.sqlite3'),
+    # 'default': {
+    #     'ENGINE': 'django.db.backends.sqlite3',
+    #     'NAME': os.path.join(BASE_DIR, 'db.sqlite3'),
+    # }
+   'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': 'postgres',
+        'USER': 'postgres',
+        'HOST': POSTGRES_HOST,
+        'PORT': POSTGRES_PORT
     }
 }
 

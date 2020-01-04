@@ -12,7 +12,7 @@ from django.utils.functional import cached_property
 from djconfig import config
 
 from badges.models import BadgeAssertion
-from courses.models import Rank, CourseStudent, Block
+from courses.models import Rank, CourseStudent
 from notifications.signals import notify
 from quest_manager.models import QuestSubmission
 from utilities.models import RestrictedFileField
@@ -84,7 +84,7 @@ class Profile(models.Model):
     preferred_name = models.CharField(max_length=50, null=True, blank=True,
                                       verbose_name='Preferred first name',
                                       help_text='If you would prefer your teacher to call you by a name other than \
-                                      the first name you entered above, put it here.')
+                                      the name on your school records, please put it here.')
     student_number = models.PositiveIntegerField(unique=True, blank=False, null=True,
                                                  validators=[student_number_validator])
     grad_year = models.PositiveIntegerField(null=True, blank=False)
@@ -98,15 +98,26 @@ class Profile(models.Model):
     xp_cached = models.IntegerField(default=0)
 
     # Student options
-    get_announcements_by_email = models.BooleanField(default=False)
+    get_announcements_by_email = models.BooleanField(
+        default=False,
+        help_text="If you provided an email address on your profile, you will get announcements emailed to you when they are published." # noqa
+    )
+    get_notifications_by_email = models.BooleanField(
+        default=False,
+        help_text="If you provided an email address on your profile, you will get unread notifications emailed to you once per day." # noqa
+    )
+    get_messages_by_email = models.BooleanField(
+        default=True,
+        help_text="If your teacher sends you a message, get an instance email." # noqa
+    )
     visible_to_other_students = models.BooleanField(
         default=False, help_text="Your marks will be visible to other students through the student list.")
     preferred_internal_only = models.BooleanField(
         verbose_name='Use preferred first name internally only',
-        default=False, help_text="Check this if you don't want your preferred first name used in any public areas.")
+        default=False, help_text="Check this if you want your preferred name used ONLY in the classroom, but NOT in other places such as on your report card.")  # noqa
     dark_theme = models.BooleanField(default=False)
     silent_mode = models.BooleanField(default=False, help_text="Don't play the gong sounds.")
-    hidden_quests = models.CharField(validators=[validate_comma_separated_integer_list], max_length=255,
+    hidden_quests = models.CharField(validators=[validate_comma_separated_integer_list], max_length=1023,
                                      null=True, blank=True)  # list of quest IDs
     is_TA = models.BooleanField(default=False, help_text="TAs can create new quests for teacher approval.")
 
@@ -325,7 +336,8 @@ class Profile(models.Model):
         # TODO: Fix this laziness
         try:
             return self.xp_cached - self.rank().xp
-        except:
+        except: # noqa
+            # TODO
             return 0
 
     #################################
@@ -343,7 +355,7 @@ class Profile(models.Model):
             return True
         else:
             if last_sub.time_completed:
-                return last_sub.time_completed < timezone.now()-timezone.timedelta(days=5)
+                return last_sub.time_completed < timezone.now() - timezone.timedelta(days=5)
             else:
                 return True
 
@@ -363,6 +375,11 @@ def create_profile(sender, **kwargs):
         if pattern.match(current_user.get_username()):
             new_profile.student_number = int(current_user.get_username())
 
+        # set first and last name on the profile.  This should be removed and just use the first and last name 
+        # from the user model! But when first implemented, first and last name weren't included in the the sign up form.
+        new_profile.first_name = current_user.first_name
+        new_profile.last_name = current_user.last_name
+
         new_profile.save()
 
         staff_list = User.objects.filter(is_staff=True)
@@ -373,6 +390,7 @@ def create_profile(sender, **kwargs):
             affected_users=staff_list,
             icon="<i class='fa fa-fw fa-lg fa-user text-success'></i>",
             verb='.  New user registered: ')
+
 
 post_save.connect(create_profile, sender=User)
 
@@ -406,23 +424,23 @@ def smart_list(value, delimiter=",", func=None):
         return []
 
     if isinstance(value, list):
-        l = value
+        ls = value
     elif isinstance(value, tuple):
-        l = list(value)
+        ls = list(value)
     elif isinstance(value, str):
         # TODO: regex this.
         value = value.lstrip('[').rstrip(']').strip(' ')
         if len(value) == 0:
             return []
         else:
-            l = value.split(delimiter)
+            ls = value.split(delimiter)
     elif isinstance(value, int):
-        l = [value]
+        ls = [value]
     else:
         raise ValueError("Unparseable smart_list value: %s" % value)
 
     try:
         func = func or (lambda x: x)
-        return [func(e) for e in l]
+        return [func(e) for e in ls]
     except Exception as ex:
         raise ValueError("Unable to parse value '%s': %s" % (value, ex))

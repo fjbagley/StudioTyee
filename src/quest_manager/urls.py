@@ -23,6 +23,7 @@ urlpatterns = [
     url(r'^$', views.quest_list, name=''),
     # url(r'^create/$', views.quest_create, name='quest_create'),
     url(r'^ajax/$', views.ajax, name='ajax'),
+    url(r'^ajax_flag/$', views.ajax_flag, name='ajax_flag'),
     url(r'^ajax_quest_info/(?P<quest_id>[0-9]+)/$', views.ajax_quest_info, name='ajax_quest_info'),
     url(r'^ajax_quest_info/$', views.ajax_quest_info, name='ajax_quest_root'),
     url(r'^ajax_quest_info/$', views.ajax_quest_info, name='ajax_quest_all'),
@@ -67,6 +68,7 @@ urlpatterns = [
     url(r'^submission/(?P<submission_id>[0-9]+)/$', views.submission, name='submission'),
     url(r'^submission/(?P<submission_id>[0-9]+)/drop/$', views.drop, name='drop'),
     url(r'^submission/(?P<submission_id>[0-9]+)/complete/$', views.complete, name='complete'),
+    url(r'^submission/save/$', views.ajax_save_draft, name='ajax_save_draft'),
     url(r'^submission/(?P<submission_id>[0-9]+)/approve/$', views.approve, name='approve'),
     url(r'^submission/past/(?P<submission_id>[0-9]+)/$', views.submission, name='submission_past'),
 

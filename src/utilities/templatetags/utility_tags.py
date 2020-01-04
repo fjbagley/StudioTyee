@@ -1,7 +1,8 @@
 from django import template
-from django.contrib.staticfiles.templatetags.staticfiles import static
+from django.contrib.sites.models import Site
+from django.templatetags.static import static
 from django.shortcuts import get_object_or_404
-from djconfig import config
+from djconfig import config, reload_maybe
 
 from utilities.models import ImageResource, MenuItem
 
@@ -26,11 +27,17 @@ def banner_url(context):
 
 @register.simple_tag
 def site_logo_url():
+    reload_maybe()  # used in celery tasks, so needs config loaded
     if config.hs_site_logo:
         site_logo = get_object_or_404(ImageResource, pk=config.hs_site_logo)
         return site_logo.image.url
     else:
         return static('img/default_icon.png')
+
+
+@register.simple_tag
+def site_logo_url_full():
+    return "https://{}{}".format(Site.objects.get_current().domain, site_logo_url())
 
 
 # https://docs.djangoproject.com/en/1.11/howto/custom-template-tags/#inclusion-tags
@@ -39,4 +46,3 @@ def site_logo_url():
 def menu_list():
     links = MenuItem.objects.filter(visible=True)
     return {'links': links}
-

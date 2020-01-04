@@ -2,22 +2,82 @@ from datetime import timedelta, date, datetime
 
 import numpy
 from django.conf import settings
+from django.core.validators import validate_comma_separated_integer_list
 from django.contrib.auth.models import User
 from django.db import models
 from django.db.models.signals import post_save
 from django.dispatch import receiver
+from django.shortcuts import get_object_or_404
+from django.templatetags.static import static
 from django.urls import reverse
 from django.utils import timezone
 from djconfig import config
+import djconfig
 from jchart import Chart
 from jchart.config import DataSet, rgba
 from workdays import networkdays, workday
+from colorful.fields import RGBColorField
+
+from utilities.models import ImageResource
 
 from prerequisites.models import IsAPrereqMixin
 from quest_manager.models import QuestSubmission
 
 
-# Create your models here.
+class MarkRangeManager(models.Manager):
+    def get_range(self, mark, courses=None):
+        """ return the MarkRange encompassed by this mark adn the list of courses """
+        self.get_queryset().filter(active=True)
+        day = timezone.localtime(timezone.now()).isoweekday()
+        # ranges for all courses
+        ranges_qs = self.get_queryset().filter(active=True, courses=None, days__contains=str(day))
+        if courses:
+            for course in courses:
+                courses_qs = course.markrange_set.filter(active=True, days__contains=str(day))  # ranges for this course
+                ranges_qs = ranges_qs | courses_qs
+
+        ranges_qs = ranges_qs.filter(minimum_mark__lte=mark)  # filter out ranges that are too high
+
+        return ranges_qs.last()  # return the highest range that qualifies
+
+    def get_range_for_user(self, user):
+        mark = user.profile.mark()
+        student_course_ids = user.profile.current_courses().values_list('course', flat=True)
+        if student_course_ids:
+            courses = Course.objects.filter(id__in=student_course_ids)
+            return self.get_range(mark, courses)
+        else:
+            return None
+
+
+class MarkRange(models.Model):
+    name = models.CharField(max_length=50, default="Chillax Line")
+    minimum_mark = models.FloatField(default=72.5, help_text="Minimum mark as a percentage from 0 to 100 (or higher)")
+    active = models.BooleanField(default=True)
+    color_light = RGBColorField(default='#BEFFFA', help_text='Color to be used in the light theme')
+    color_dark = RGBColorField(default='#337AB7', help_text='Color to be used in the dark theme')
+    days = models.CharField(
+        validators=[validate_comma_separated_integer_list],
+        max_length=13,
+        help_text='Comma seperated list of weekdays that this range is active, where Monday=1 and Sunday=7. \
+                   E.g.: "1,3,5" for M, W, F.',
+        default="1,2,3,4,5,6,7"
+    )
+    courses = models.ManyToManyField(
+        "courses.course",
+        blank=True,
+        help_text="Which courses this field is relevant to; If left blank it will apply to all courses."
+    )
+
+    objects = MarkRangeManager()
+
+    class Meta:
+        ordering = ['minimum_mark']
+
+    def __str__(self):
+        return self.name + " (" + str(self.minimum_mark) + "%)"
+
+
 class RankQuerySet(models.query.QuerySet):
     def get_ranks_lte(self, xp):
         return self.filter(xp__lte=xp)
@@ -59,7 +119,13 @@ class Rank(models.Model, IsAPrereqMixin):
         return reverse('courses:ranks')
 
     def get_icon_url(self):
-        return self.icon.url
+        if self.icon and hasattr(self.icon, 'url'):
+            return self.icon.url
+
+        if config.hs_default_icon:
+            icon = get_object_or_404(ImageResource, pk=config.hs_default_icon)
+            return icon.image.url
+        return static('img/default_icon.png')
 
     def condition_met_as_prerequisite(self, user, num_required):
         # num_required is not used for this one
@@ -133,7 +199,7 @@ class SemesterManager(models.Manager):
 
 
 def default_end_date():
-        return date.today() + timedelta(days=135)
+    return date.today() + timedelta(days=135)
 
 
 class Semester(models.Model):
@@ -158,13 +224,16 @@ class Semester(models.Model):
         return self.first_day.strftime("%b-%Y")
 
     def active_by_date(self):
-        return (self.last_day + timedelta(days=5)) > timezone.now().date() > (self.first_day - timedelta(days=20))
+        # use local date `datetime.date.today()` instead of UTC date from `timezone.now().date()`
+        return (self.last_day + timedelta(days=5)) > date.today() > (self.first_day - timedelta(days=20))
 
     def is_open(self):
         """
         :return: True if the current date falls within the semeseter's first and last day (inclusive)
         """
-        return self.first_day <= timezone.now().date() <= self.last_day
+        # don't use timezone.now().date() because it uses UTC, and might not be the same as
+        # the current local date.  Use current local date with date.today()
+        return self.first_day <= date.today() <= self.last_day
 
     def num_days(self, upto_today=False):
         '''The number of classes in the semester (from start date to end date
@@ -227,14 +296,14 @@ class Semester(models.Model):
         # make timezone aware
         return timezone.make_aware(dt, timezone.get_default_timezone())
 
-    def chillax_line_started(self):
-        # return timezone.now().date() > self.get_interim1_date()
-        return config.hs_chillax_line_active
+    # def chillax_line_started(self):
+    #     # return timezone.now().date() > self.get_interim1_date()
+    #     return config.hs_chillax_line_active
 
-    def chillax_line(self):
-        cline = config.hs_chillax_line
-        fraction = self.fraction_complete()
-        return round(1000 * cline * fraction)
+    # def chillax_line(self):
+    #     cline = config.hs_chillax_line
+    #     fraction = self.fraction_complete()
+    #     return round(1000 * cline * fraction)
 
     def get_student_mark_list(self, students_only=False):
         students = CourseStudent.objects.all_users_for_active_semester(students_only=students_only)
@@ -276,7 +345,7 @@ class ExcludedDate(models.Model):
         return self.date.strftime("%d-%b-%Y")
 
 
-class Course(models.Model):
+class Course(models.Model, ):
     title = models.CharField(max_length=50, unique=True)
     icon = models.ImageField(upload_to='icons/', null=True, blank=True)
     active = models.BooleanField(default=True)
@@ -286,6 +355,23 @@ class Course(models.Model):
 
     class Meta:
         ordering = ["title"]
+
+    # # required for prereq mixin (grapelli lookup) since no name field already.
+    # @property
+    # def name(self):
+    #     return self.title
+
+    def condition_met_as_prerequisite(self, user, num_required):
+        # num_required is not used for this one
+        coursestudents = CourseStudent.objects.current_courses(user)
+        if coursestudents.filter(course__pk=self.pk):
+            return True
+        else:
+            return False
+
+    @staticmethod
+    def autocomplete_search_fields():  # for grapelli prereq selection
+        return ("title__icontains",)
 
 
 class CourseStudentQuerySet(models.query.QuerySet):
@@ -357,6 +443,7 @@ class CourseStudentManager(models.Manager):
         return self.current_courses(user).first()
 
     def current_courses(self, user):
+        djconfig.reload_maybe()  # prevent celery tasks from breaking when run manually
         return self.all_for_user(user).get_semester(config.hs_active_semester)
 
     def all_users_for_active_semester(self, students_only=False):
@@ -400,10 +487,10 @@ class CourseStudent(models.Model):
 
     def __str__(self):
         return self.user.get_username() \
-               + ", " + str(self.semester) if self.semester else "" \
-               + ", " + str(self.block.block) if self.block else "" \
-               + ": " + str(self.course) \
-               + " " + str(self.grade_fk.value) if self.grade_fk else ""
+            + ", " + str(self.semester) if self.semester else "" \
+            + ", " + str(self.block.block) if self.block else "" \
+            + ": " + str(self.course) \
+            + " " + str(self.grade_fk.value) if self.grade_fk else ""
 
     def get_absolute_url(self):
         return reverse('courses:list')

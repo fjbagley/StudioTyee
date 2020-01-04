@@ -1,5 +1,7 @@
+import json
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
+from django.conf import settings
 from django.db import models
 from django.db.models.base import ObjectDoesNotExist
 
@@ -21,7 +23,7 @@ class IsAPrereqMixin:
         :return: True if the user meets the requirements for this object as a prerequisite, otherwise False.
 
         """
-        return False
+        raise NotImplementedError
 
     def is_used_prereq(self):
         """
@@ -53,54 +55,56 @@ class IsAPrereqMixin:
                     reliant_objects.append(parent_obj)
         return reliant_objects
 
-    # to help with the prerequisite choices!
-    # TODO: Why? link to grapelli docs and let implementing class choose field instead of static?
+    # to help with the prerequisite choices: 
+    # https://django-grappelli.readthedocs.io/en/latest/customization.html#autocomplete-lookups
+    # override this static method in the class to choose different search fields
     @staticmethod
     def autocomplete_search_fields():
         return ("name__icontains",)
 
 
-class PrereqQuerySet(models.query.QuerySet):
-    """
-    For models that have prerequisites
-    NOT CURRENTLY USED
-    """
+# class PrereqQuerySet(models.query.QuerySet):
+#     """
+#     For models that have prerequisites
+#     NOT CURRENTLY USED
+#     """
 
-    def __init__(self, no_prereqs_means=False):
-        """
-        :param no_prereqs_means: If an instance of this model has no prereqs, what should happen?
-            True -> Make the object available
-            False -> The object is unavailable (and would have to be made available through some other mechanism)  I use
-            this for badges, which must be granted manually if they have no prerequisites.
-        """
-        self.no_prereqs_means = no_prereqs_means
-        super(PrereqQuerySet, self).__init__()
+#     def __init__(self, no_prereqs_means=False):
+#         """
+#         :param no_prereqs_means: If an instance of this model has no prereqs, what should happen?
+#             True -> Make the object available
+#             False -> The object is unavailable (and would have to be made available through some other mechanism)
+#              I use this for badges, which must be granted manually if they have no prerequisites.
+#         """
+#         self.no_prereqs_means = no_prereqs_means
+#         super(PrereqQuerySet, self).__init__()
 
-    def get_conditions_met(self, user):
-        """
-        :param user:
-        :param initial_query_set: The queryset to filter.  I think this is a very inefficient method, so until I figure
-        out how to speed it up, make sure the provided query_set is already filtered down as small as possible.
-        :return: A queryset containing all objects (of the model implementing this mixin) for which the user has met
-        the prerequisites
-        """
+#     def get_conditions_met(self, user):
+#         """
+#         :param user:
+#         :param initial_query_set: The queryset to filter.  I think this is a very inefficient method, so until
+#          I figure out how to speed it up, make sure the provided query_set is already filtered down as small
+#          as possible.
+#         :return: A queryset containing all objects (of the model implementing this mixin) for which the user has met
+#         the prerequisites
+#         """
 
-        # Initialize member variable in case the constructor wasn't called,
-        # which might happen if the class implementing this mixin doesn't call the constructor?
-        # If you're reading this and understand how python inheritance works with constructors, please let me know =)
-        # I could look it up myself, but I'm on the subway with no internet access while on vacation in London,
-        # and by the time I do get internet access, I'll probably be on to something else and forget about it.
-        # TODO: is this necessary?
-        if self.no_prereqs_means is None:
-            self.no_prereqs_means = True
+#         # Initialize member variable in case the constructor wasn't called,
+#         # which might happen if the class implementing this mixin doesn't call the constructor?
+#         # If you're reading this and understand how python inheritance works with constructors, please let me know =)
+#         # I could look it up myself, but I'm on the subway with no internet access while on vacation in London,
+#         # and by the time I do get internet access, I'll probably be on to something else and forget about it.
+#         # TODO: is this necessary?
+#         if self.no_prereqs_means is None:
+#             self.no_prereqs_means = True
 
-        # TODO: Make this more efficient, too slow!
-        # build a list of object pks to use in the filter.
-        pk_met_list = [
-            obj.pk for obj in self
-            if Prereq.objects.all_conditions_met(obj, user)
-            ]
-        return self.filter(pk__in=pk_met_list)
+#         # TODO: Make this more efficient, too slow!
+#         # build a list of object pks to use in the filter.
+#         pk_met_list =  [
+#             obj.pk for obj in self
+#             if Prereq.objects.all_conditions_met(obj, user)
+#             ]
+#         return self.filter(pk__in=pk_met_list)
 
 
 class PrereqQuerySet(models.query.QuerySet):
@@ -150,9 +154,9 @@ class PrereqManager(models.Manager):
         [this is because different models might want different behaviour if there are no prereqs, they can
         either be available (default, no_prereq_means=True) or unavailable (no_prereq_means=False).]
 
-        This should be set in the IsAPrereqMixin constructor... I'd tell you how to do it here but I haven't figured it out yet.
-        I assume by the time this is published anywhere that someone is reading it other than myself, the mixin itself
-        will explain better...
+        This should be set in the IsAPrereqMixin constructor... I'd tell you how to do it here but I haven't figured it
+        out yet.  I assume by the time this is published anywhere that someone is reading it other than myself, the
+        mixin itself will explain better...
         """
         prereqs = self.all_parent(parent_object)
         if not prereqs:
@@ -177,14 +181,15 @@ class Prereq(models.Model, IsAPrereqMixin):
     """
     A Prereq object indicates some conditions (prerequisites) that must be met before gaining access to something else.
 
-    parent_object: The parent object is the thing with restricted access (for example, a quest, or a badge).  Access to it
-     is granted once the conditions are met.
+    parent_object: The parent object is the thing with restricted access (for example, a quest, or a badge).
+     Access to it is granted once the conditions are met.
 
     prereq_object: This is the main condition that has to be met for a user to gain access to the parent object.
      How that condition is met is determined by the Class's implementation of `condition_met_as_prerequisite()` from the
      IsAPrereqMixin.  This object could be any model that implements the mixin (quest, badge, grade, course, etc)
 
-    or_prereq_object: This is an ALTERNATE condition that could be met instead of the condition laid out by prereq_object
+    or_prereq_object: This is an ALTERNATE condition that could be met instead of the condition laid out by prereq_
+     object.
 
     Simple example:  Imagine a quest that a student only gains access to if they are in a grade 10 course:
 
@@ -312,7 +317,8 @@ class Prereq(models.Model, IsAPrereqMixin):
         If Quest <"Some Quest"> is passed to PrereqManager.all_conditions_met() for a user, it will search for
         Prereq objects and find our example above.  In turn, it will call THIS method on that Prereq.
 
-        The example Prereq shows that Grade <"Grade 10"> is required before Quest <"Some Quest"> is available to the student.
+        The example Prereq shows that Grade <"Grade 10"> is required before Quest <"Some Quest">
+        is available to the student.
 
         THIS method will then call condition_met_as_prerequisite on Grade <"Grade 10"> FOR THAT USER.
 
@@ -373,7 +379,7 @@ class Prereq(models.Model, IsAPrereqMixin):
         registered_list = [
             ct.pk for ct in ContentType.objects.all()
             if cls.model_is_registered(ct)
-            ]
+        ]
         return ContentType.objects.filter(pk__in=registered_list)
 
     @staticmethod
@@ -390,3 +396,23 @@ class Prereq(models.Model, IsAPrereqMixin):
             return True
 
         return False
+
+
+class PrereqAllConditionsMet(models.Model):
+    """ I think these are a list of prereq objects used for caching?
+    """
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    ids = models.TextField()  # ids of what?!?  Prerequisites?
+    model_name = models.CharField(max_length=256)
+
+    def add_id(self, new_id):
+        ids = self.get_ids([])
+        if new_id not in ids:
+            ids.append(new_id)
+            self.ids = str(ids)
+            self.save()
+
+    def get_ids(self, default=None):
+        if self.ids:
+            return json.loads(self.ids)
+        return default

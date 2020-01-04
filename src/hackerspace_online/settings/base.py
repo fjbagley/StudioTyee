@@ -90,6 +90,17 @@ INSTALLED_APPS = (
     # https://django-import-export.readthedocs.io
     'import_export',
 
+    'django_celery_beat',
+
+    # django-postman 
+    'postman',
+
+    # https://github.com/charettes/django-colorful
+    'colorful',
+
+    # django-attachments
+    'attachments',
+
     # hackerspace_online.apps.HackerspaceConfig
     'hackerspace_online',
 
@@ -106,7 +117,7 @@ INSTALLED_APPS = (
     'djcytoscape',
     'portfolios',
     'utilities',
-    # 'tours',
+   # 'tours',
 )
 
 # http://django-allauth.readthedocs.io/en/latest/installation.html#post-installation
@@ -143,6 +154,8 @@ TEMPLATES = [
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
 
+                'postman.context_processors.inbox',
+
                 # "allauth" specific context processors
                 # 0.22.0 http://django-allauth.readthedocs.io/en/latest/release-notes.html#id17
                 # 'allauth.account.context_processors.account',
@@ -155,10 +168,17 @@ TEMPLATES = [
     },
 ]
 
+# Redis:
+REDIS_HOST = os.environ.get('REDIS_HOST', '127.0.0.1')
+REDIS_PORT = os.environ.get('REDIS_PORT', '6379')
+
 CACHES = {
-    'default': {
-        'BACKEND': 'django.core.cache.backends.memcached.MemcachedCache',
-        'LOCATION': 'unix:/tmp/memcached.sock',
+    "default": {
+        "BACKEND": "django_redis.cache.RedisCache",
+        "LOCATION": "redis://{}:{}/1".format(REDIS_HOST, REDIS_PORT),
+        "OPTIONS": {
+            "CLIENT_CLASS": "django_redis.client.DefaultClient",
+        }
     },
     'select2': {
         'BACKEND': 'django.core.cache.backends.db.DatabaseCache',
@@ -203,15 +223,15 @@ CRISPY_TEMPLATE_PACK = 'bootstrap3'
 SITE_ID = 3
 
 # AllAuth Configuration
-SOCIALACCOUNT_PROVIDERS = \
-    {'facebook':
-         {'SCOPE': ['email', 'public_profile'],
-          'AUTH_PARAMS': {'auth_type': 'reauthenticate'},
-          'METHOD': 'oauth2',
-          # 'LOCALE_FUNC': 'path.to.callable',
-          'VERIFIED_EMAIL': False,
-          'VERSION': 'v2.3'}
-     }
+# SOCIALACCOUNT_PROVIDERS = \
+#     {'facebook':
+#          {'SCOPE': ['email', 'public_profile'],
+#           'AUTH_PARAMS': {'auth_type': 'reauthenticate'},
+#           'METHOD': 'oauth2',
+#           # 'LOCALE_FUNC': 'path.to.callable',
+#           'VERIFIED_EMAIL': False,
+#           'VERSION': 'v2.3'}
+#      }
 
 # https://django-allauth.readthedocs.org/en/latest/configuration.html
 LOGIN_REDIRECT_URL = '/'
@@ -238,6 +258,7 @@ ACCOUNT_EMAIL_VERIFICATION = None  # (=”optional”)
 # The default protocol used for when generating URLs, e.g. for the password forgotten procedure. Note that this is a default only – see the section on HTTPS for more information.
 # ACCOUNT_FORMS #(={})
 # Used to override forms, for example: {‘login’: ‘myapp.forms.LoginForm’}
+ACCOUNT_FORMS = {'signup': 'hackerspace_online.forms.CustomSignupForm'}
 # ACCOUNT_LOGOUT_ON_GET #(=False)
 # Determines whether or not the user is automatically logged out by a mere GET request. See documentation for the LogoutView for details.
 ACCOUNT_LOGOUT_ON_PASSWORD_CHANGE = True  # (=False)
@@ -251,6 +272,7 @@ ACCOUNT_LOGOUT_REDIRECT_URL = LOGIN_URL  # (=”/”)
 #
 #################################
 
+SUMMERNOTE_THEME = 'bs3'
 SUMMERNOTE_CONFIG = {
     # Using SummernoteWidget - iframe mode, default
     'iframe': True,
@@ -289,6 +311,13 @@ SUMMERNOTE_CONFIG = {
         # 'print': {
         #     'stylesheetUrl': '/some_static_folder/printable.css',
         # },
+        'codemirror': {
+            'mode': 'htmlmixed',
+            'lineNumbers': 'true',
+            'lineWrapping': 'true',
+            # You have to include theme file in 'css' or 'css_for_inplace' before using it.
+            'theme': 'monokai',
+        },
 
     },
 
@@ -308,7 +337,10 @@ SUMMERNOTE_CONFIG = {
     # You can disable attachment feature.
     # Currently only works for images anyway.  Turn on when it works with other files
     # Images can still be embedded with the image tool
-    'disable_attachment': True,
+    'disable_attachment': False,
+
+    # Set `True` to return attachment paths in absolute URIs.
+    'attachment_absolute_uri': False,
 
     # You can also add custom css/js for SummernoteInplaceWidget.
     # !!! Be sure to put {{ form.media }} in template before initiate summernote.
@@ -381,17 +413,33 @@ SUMMERNOTE_CONFIG = {
         ],
     },
 
-    'codemirror': {
-        'mode': 'htmlmixed',
-        'lineNumbers': 'true',
-        'lineWrapping': 'true',
-        # You have to include theme file in 'css' or 'css_for_inplace' before using it.
-        'theme': 'monokai',
-    },
-
     # Lazy initialize
     # If you want to initialize summernote at the bottom of page, set this as True
     # and call `initSummernote()` on your page.
     # 'lazy': True,
 
 }
+
+# Celery:
+CELERY_BROKER_URL = "redis://{}:{}/0".format(REDIS_HOST, REDIS_PORT)
+CELERY_ACCEPT_CONTENT = ['application/json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+
+CELERY_TIMEZONE = TIME_ZONE
+CELERY_TASK_MAX_RETRIES = 10
+CELERY_TASKS_BUNCH_SIZE = 10
+
+# allowed delay between conditions met updates for all users:
+CONDITIONS_UPDATE_COUNTDOWN = 60 * 1  # In sec., wait before start next 'big' update for all conditions, if it's going to start - all other updates could be skipped
+
+# Django Postman
+POSTMAN_DISALLOW_ANONYMOUS = True
+# POSTMAN_NOTIFICATION_APPROVAL = 'path.to.function.accepts.user.action.site.returns.boolean'
+POSTMAN_NOTIFICATION_APPROVAL = lambda u: u.profile.get_messages_by_email
+POSTMAN_AUTO_MODERATE_AS = True  # only student <> teacher interactions will be allowed, so no need to moderate student <> student
+POSTMAN_NAME_USER_AS = 'id'  # need to use key/id for select2 widget
+# POSTMAN_SHOW_USER_AS = lambda u: u.id
+
+# https://github.com/charettes/django-colorful
+GRAPPELLI_CLEAN_INPUT_TYPES= False

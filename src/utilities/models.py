@@ -1,12 +1,16 @@
 from django.utils.safestring import mark_safe
 
+from django.contrib.auth import get_user_model
 from django.db import models
+
 from url_or_relative_url_field.fields import URLOrRelativeURLField
 
 
 # http://stackoverflow.com/questions/2472422/django-file-upload-size-limit
 # https://github.com/mixkorshun/django-safe-filefield/blob/master/safe_filefield/models.py
 from utilities.fields import RestrictedFileFormField
+
+User = get_user_model()
 
 
 class RestrictedFileField(models.FileField):
@@ -51,7 +55,7 @@ class VideoResource(models.Model):
 
     """
     title = models.CharField(max_length=50)
-    video_file = models.FileField(upload_to='videos/') # verbose_name=""
+    video_file = models.FileField(upload_to='videos/')  # verbose_name=""
     datetime_created = models.DateTimeField(auto_now_add=True, auto_now=False)
     datetime_last_edit = models.DateTimeField(auto_now_add=False, auto_now=True)
 
@@ -79,10 +83,3 @@ class MenuItem(models.Model):
         return '<a href="{0}" {1}>' \
                '<i class="fa fa-fw fa-{2}"></i>&nbsp;&nbsp;{3}' \
                '</a>'.format(self.url, target, self.fa_icon, self.label)
-
-
-
-
-
-
-

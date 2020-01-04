@@ -19,6 +19,12 @@ class ProfileTestModel(TestCase):
         # Profiles are created automatically with each user, so we only need to access profiles via users
         self.profile = self.user.profile
 
+        self.active_sem = mommy.make(Semester, pk=djconfig.config.hs_active_semester)
+
+        # Why is this required?  Why can't I just mommy.make(Semester)?  For some reason when I
+        # use mommy.make(Semester) it tried to duplicate the pk, using pk=1 again?!
+        self.inactive_sem = mommy.make(Semester, pk=(djconfig.config.hs_active_semester + 1))
+
     def test_profile_creation(self):
         self.assertIsInstance(self.user.profile, Profile)
         self.assertEqual(str(self.user.profile), self.user.username)
@@ -64,43 +70,40 @@ class ProfileTestModel(TestCase):
     def test_profile_current_courses(self):
         # no current courses to start
         self.assertFalse(self.profile.current_courses().exists())
-        sem = mommy.make('courses.semester')
         # add one and test
-        course_registration = mommy.make('courses.CourseStudent', user=self.user, semester=sem)
+        course_registration = mommy.make('courses.CourseStudent', user=self.user, semester=self.active_sem)
         self.assertQuerysetEqual(self.profile.current_courses(), [repr(course_registration)])
         # add a second
-        course_registration2 = mommy.make('courses.CourseStudent', user=self.user, semester=sem)
-        self.assertQuerysetEqual(self.profile.current_courses(), [repr(course_registration), repr(course_registration2)])
+        course_registration2 = mommy.make('courses.CourseStudent', user=self.user, semester=self.active_sem)
+        self.assertQuerysetEqual(
+            self.profile.current_courses(),
+            [repr(course_registration), repr(course_registration2)]
+        )
 
     def test_profile_has_current_course(self):
         self.assertFalse(self.profile.has_current_course)
-        sem = mommy.make('courses.semester')
-        mommy.make('courses.CourseStudent', user=self.user, semester=sem)
+        mommy.make('courses.CourseStudent', user=self.user, semester=self.active_sem)
         profile = Profile.objects.get(pk=self.profile.id)  # Refresh profile to avoid cached_property
         self.assertTrue(profile.has_current_course)
 
     def test_profile_has_past_courses(self):
         self.assertFalse(self.profile.has_past_courses)
-        sem = mommy.make('courses.semester')
-        sem = mommy.make('courses.semester')
-        mommy.make('courses.CourseStudent', user=self.user, semester=sem)
+        mommy.make('courses.CourseStudent', user=self.user, semester=self.inactive_sem)
         profile = Profile.objects.get(pk=self.profile.id)  # Refresh profile to avoid cached_property
         self.assertTrue(profile.has_past_courses)
 
     def test_profile_blocks(self):
         self.assertIsNone(self.profile.blocks())
-        sem = mommy.make(Semester)
-        mommy.make('courses.CourseStudent', user=self.user, semester=sem)
+        mommy.make('courses.CourseStudent', user=self.user, semester=self.active_sem)
         self.assertIsNotNone(self.profile.blocks())
         # TODO fully test this with multiple blocks
 
     def test_profile_teachers(self):
         self.assertEqual(list(self.profile.teachers()), [])
-
-        sem = mommy.make(Semester)
-        course_registration = mommy.make('courses.CourseStudent', user=self.user, semester=sem)
+        course_registration = mommy.make('courses.CourseStudent', user=self.user, semester=self.active_sem)
         # Still no teachers since no teacher assign to this course's block yet
-        self.assertEqual(list(self.profile.teachers()), [None])  # why is this a list of None instead of just empty?
+        # why is this a list of None instead of just empty? SQLite thing?
+        self.assertEqual(list(self.profile.teachers()), [None])
 
         self.assertTrue(self.profile.has_current_course)
         course_registration.block = mommy.make('courses.block', current_teacher=self.teacher)
@@ -111,8 +114,7 @@ class ProfileTestModel(TestCase):
     def test_profile_current_teachers(self):
         self.assertFalse(self.profile.current_teachers().exists())
 
-        sem = mommy.make(Semester)
-        course_registration = mommy.make('courses.CourseStudent', user=self.user, semester=sem)
+        course_registration = mommy.make('courses.CourseStudent', user=self.user, semester=self.active_sem)
 
         # Still no teachers since no teacher assign to this course's block yet
         self.assertFalse(self.profile.current_teachers().exists())
@@ -121,7 +123,6 @@ class ProfileTestModel(TestCase):
 
         # print(course_registration)
         # print(self.profile.current_teachers()) # why is this empty?!?!
-
 
 
 class SmartListTests(SimpleTestCase):
@@ -139,13 +140,13 @@ class SmartListTests(SimpleTestCase):
         self.assertEqual(smart_list('1;2;3', delimiter=';'), ['1', '2', '3'])
 
     def test_smart_list_csv_to_int(self):
-            self.assertEqual(smart_list('1,2,3', func=lambda x: int(x)), [1, 2, 3])
+        self.assertEqual(smart_list('1,2,3', func=lambda x: int(x)), [1, 2, 3])
 
     def test_smart_list_tuple(self):
-        self.assertEqual(smart_list((1, 2, 3)),  [1, 2, 3])
+        self.assertEqual(smart_list((1, 2, 3)), [1, 2, 3])
 
     def test_smart_list_list(self):
-        self.assertEqual(smart_list([1, 2, 3]),  [1, 2, 3])
+        self.assertEqual(smart_list([1, 2, 3]), [1, 2, 3])
 
     def test_smart_list_int(self):
-        self.assertEqual(smart_list(1),  [1])
+        self.assertEqual(smart_list(1), [1])

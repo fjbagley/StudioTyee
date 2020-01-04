@@ -12,10 +12,13 @@ from django.template.loader import render_to_string
 from django.urls import reverse_lazy, reverse
 from django.views.generic.edit import DeleteView, UpdateView, CreateView
 
+from djconfig import config
+
 from badges.models import BadgeAssertion
 from comments.models import Comment, Document
 from notifications.signals import notify
 from prerequisites.models import Prereq
+from prerequisites.tasks import update_quest_conditions_for_user
 from .forms import QuestForm, SubmissionForm, SubmissionFormStaff, SubmissionQuickReplyForm
 from .models import Quest, QuestSubmission
 
@@ -381,13 +384,12 @@ def detail(request, quest_id):
     return render(request, 'quest_manager/detail.html', context)
 
 
-
-
 #######################################
 #
 #  Quest APPROVAL VIEWS
 #
 # #################################
+
 
 @staff_member_required
 def approve(request, submission_id):
@@ -418,9 +420,13 @@ def approve(request, submission_id):
                 for badge in badges:
                     # badge = get_object_or_404(Badge, pk=badge_id)
                     new_assertion = BadgeAssertion.objects.create_assertion(submission.user, badge, request.user)
-                    messages.success(request, ("Badge " + str(new_assertion) + " granted to " + str(new_assertion.user)))
+                    messages.success(
+                        request,
+                        ("Badge " + str(new_assertion) + " granted to " + str(new_assertion.user))
+                    )
                     comment_text_addition += "<p></br><i class='fa fa-certificate text-warning'></i> The <b>" + \
-                                            badge.name + "</b> badge was granted for this quest <i class='fa fa-certificate text-warning'></i></p>"
+                                             badge.name + "</b> badge was granted for this quest " + \
+                                             "<i class='fa fa-certificate text-warning'></i></p>"
 
             # handle with quest comments
             blank_comment_text = ""
@@ -430,8 +436,8 @@ def approve(request, submission_id):
                        "<i class='fa fa-check fa-stack-2x text-success'></i>" + \
                        "<i class='fa fa-shield fa-stack-1x'></i>" + \
                        "</span>"
-                blank_comment_text = "(approved without comment)"
-                submission.mark_approved()  ##############
+                blank_comment_text = config.hs_blank_approval_text
+                submission.mark_approved()
             elif 'comment_button' in request.POST:
                 note_verb = "commented on"
                 icon = "<span class='fa-stack'>" + \
@@ -445,8 +451,8 @@ def approve(request, submission_id):
                        "<i class='fa fa-shield fa-stack-1x'></i>" + \
                        "<i class='fa fa-ban fa-stack-2x text-danger'></i>" + \
                        "</span>"
-                blank_comment_text = "(returned without comment)"
-                submission.mark_returned()  ##############
+                blank_comment_text = config.hs_blank_return_text
+                submission.mark_returned()
             else:
                 raise Http404("unrecognized submit button")
 
@@ -464,9 +470,7 @@ def approve(request, submission_id):
 
             # handle files
             if request.FILES:
-                file_list = request.FILES.getlist('files')
-                for afile in file_list:
-                    # print(afile)
+                for afile in request.FILES.getlist('attachments'):
                     newdoc = Document(docfile=afile, comment=comment_new)
                     newdoc.save()
 
@@ -489,7 +493,8 @@ def approve(request, submission_id):
 
             message_string = "<a href='" + origin_path + "'>Submission of " + \
                              submission.quest.name + "</a> " + note_verb + \
-                             " for <a href='" + submission.user.profile.get_absolute_url() + "'>" + submission.user.username + "</a>"
+                             " for <a href='" + submission.user.profile.get_absolute_url() + "'>" + \
+                             submission.user.username + "</a>"
             messages.success(request, message_string)
 
             return redirect("quests:approvals")
@@ -628,6 +633,7 @@ def approvals(request, quest_id=None):
         "current_teacher_only": current_teacher_only,
         "past_approvals_all": past_approvals_all,
         "quest": quest,
+        "quick_reply_text": config.hs_submission_quick_text
     }
     return render(request, "quest_manager/quest_approval.html", context)
 
@@ -639,6 +645,12 @@ def approvals(request, quest_id=None):
 #########################################
 @login_required
 def complete(request, submission_id):
+    """
+    When a student has completed a quest, or is commenting on an already completed quest, this view is called
+    - The submission is marked as completed (by the student)
+    - If the quest is automatically approved, then the submission is also marked as approved, and available quests are 
+         recalculated directly/synchromously, so that their available quest list is up to date
+    """
     submission = get_object_or_404(QuestSubmission, pk=submission_id)
     origin_path = submission.get_absolute_url()
 
@@ -673,8 +685,7 @@ def complete(request, submission_id):
             )
 
             if request.FILES:
-                file_list = request.FILES.getlist('files')
-                for afile in file_list:
+                for afile in request.FILES.getlist('attachments'):
                     newdoc = Document(docfile=afile, comment=comment_new)
                     newdoc.save()
 
@@ -693,9 +704,11 @@ def complete(request, submission_id):
                     affected_users = [submission.quest.specific_teacher_to_notify, ]
                 else:
                     affected_users = None
-                submission.mark_completed()  ###################
+                submission.mark_completed()
                 if not submission.quest.verification_required:
                     submission.mark_approved()
+                    # Immediate/synchronous recalculation of available quests:
+                    update_quest_conditions_for_user.apply(args=[request.user.id])
 
             elif 'comment' in request.POST:
                 note_verb = "commented on"
@@ -776,7 +789,6 @@ def start(request, quest_id):
     # #reply_comment_form = CommentForm(request.POST or None, label="")
     # # comments = Comment.objects.all_with_target_object(sub)
 
-
     # Migth need this for the tour to work!
     # context = {
     #     "heading": sub.quest.name,
@@ -786,6 +798,7 @@ def start(request, quest_id):
     #     # "reply_comment_form": reply_comment_form,
     # }
     # return render(request, 'quest_manager/submission.html', context)
+
 
 @login_required
 def hide(request, quest_id):
@@ -806,6 +819,7 @@ def unhide(request, quest_id):
 
     return redirect("quests:available_all")
 
+
 @login_required
 def skip(request, submission_id):
     submission = get_object_or_404(QuestSubmission, pk=submission_id)
@@ -815,17 +829,17 @@ def skip(request, submission_id):
     if (request.user.profile.game_lab_transfer_process_on and submission.user == request.user) or request.user.is_staff:
 
         # add default comment to submission
-        origin_path = submission.get_absolute_url()
-        comment_text = "(Quest skipped - no XP granted)"
-        comment_new = Comment.objects.create_comment(
-            user=request.user,
-            path=origin_path,
-            text=comment_text,
-            target=submission,
-        )
+        # origin_path = submission.get_absolute_url()
+        # comment_text = "(Quest skipped - no XP granted)"
+        # comment_new = Comment.objects.create_comment(
+        #     user=request.user,
+        #     path=origin_path,
+        #     text=comment_text,
+        #     target=submission,
+        # )
 
         # approve quest automatically, and mark as transfer.
-        submission.mark_completed()  ###################
+        submission.mark_completed()
         submission.mark_approved(transfer=True)
 
         messages.success(request,
@@ -877,6 +891,29 @@ def skipped(request, quest_id):
 
 
 @login_required
+def ajax_save_draft(request):
+    if request.is_ajax() and request.POST:
+
+        submission_comment = request.POST.get('comment')
+        submission_id = request.POST.get('submission_id')
+
+        sub = get_object_or_404(QuestSubmission, pk=submission_id)
+        sub.draft_text = submission_comment
+        sub.save()
+
+        response_data = {}
+        response_data['result'] = 'Draft saved'
+
+        return HttpResponse(
+            json.dumps(response_data),
+            content_type="application/json"
+        )
+
+    else:
+        raise Http404
+
+
+@login_required
 def drop(request, submission_id):
     sub = get_object_or_404(QuestSubmission, pk=submission_id)
     template_name = "quest_manager/questsubmission_confirm_delete.html"
@@ -900,7 +937,9 @@ def submission(request, submission_id=None, quest_id=None):
         # Staff form has additional fields such as award granting.
         main_comment_form = SubmissionFormStaff(request.POST or None)
     else:
-        main_comment_form = SubmissionForm(request.POST or None)
+        initial = {'comment_text': sub.draft_text}
+        main_comment_form = SubmissionForm(request.POST or None, initial=initial)
+
     # main_comment_form = CommentForm(request.POST or None, wysiwyg=True, label="")
     # reply_comment_form = CommentForm(request.POST or None, label="")
     # comments = Comment.objects.all_with_target_object(sub)
@@ -912,6 +951,7 @@ def submission(request, submission_id=None, quest_id=None):
         # "comments": comments,
         "submission_form": main_comment_form,
         # "reply_comment_form": reply_comment_form,
+        "quick_reply_text": config.hs_submission_quick_text,
     }
     return render(request, 'quest_manager/submission.html', context)
 
@@ -965,6 +1005,19 @@ def flag(request, submission_id):
 
 
 @staff_member_required
+def ajax_flag(request):
+    if request.is_ajax() and request.method == "POST":
+
+        submission_id = request.POST.get('submission_id', None)
+        sub = QuestSubmission.objects.get(id=submission_id)
+        sub.flagged_by = request.user
+        sub.save()
+        return JsonResponse(data={})
+    else:
+        raise Http404
+
+
+@staff_member_required
 def unflag(request, submission_id):
     sub = get_object_or_404(QuestSubmission, pk=submission_id)
 
@@ -976,4 +1029,3 @@ def unflag(request, submission_id):
                      (sub.get_absolute_url(), sub.quest_name(), sub.user))
 
     return redirect("quests:approvals")
-

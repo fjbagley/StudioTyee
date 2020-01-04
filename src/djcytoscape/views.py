@@ -9,7 +9,6 @@ from django.views.generic import ListView
 from django.views.generic.edit import UpdateView, DeleteView
 from django.urls import reverse_lazy
 from djcytoscape.forms import GenerateQuestMapForm
-from quest_manager.models import Quest
 
 from .models import CytoScape
 
@@ -25,7 +24,7 @@ class ScapeUpdate(UpdateView):
 
 class ScapeDelete(DeleteView):
     model = CytoScape
-    success_url = reverse_lazy('djcytoscape:index')
+    success_url = reverse_lazy('djcytoscape:list')
 
     @method_decorator(staff_member_required)
     def dispatch(self, *args, **kwargs):
@@ -132,4 +131,3 @@ def regenerate_all(request):
         scape.regenerate()
     messages.success(request, "All quest maps have been regenerated.")
     return redirect('djcytoscape:primary')
-

@@ -1,3 +1,5 @@
+from collections import defaultdict
+
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.db import models
@@ -7,12 +9,82 @@ from django.templatetags.static import static
 from django.urls import reverse
 from djconfig import config
 
+from django.dispatch import receiver
+from django.db.models.signals import post_save
+from notifications.signals import notify
+
 from prerequisites.models import Prereq, IsAPrereqMixin
+from utilities.models import ImageResource
 
 
 # from courses.models import Semester
 
 # Create your models here.
+
+class BadgeRarityManager(models.Manager):
+    def get_rarity(self, percentile):
+        """Because this model is sorted by rarity, with the rarist on top,
+        the first item in the returned list will be the rarest category of the item"""
+        if percentile > 100.0:
+            percentile = 100
+        rarities = self.get_queryset().filter(percentile__gte=percentile)
+        return rarities.first()
+
+
+class BadgeRarity(models.Model):
+    """
+    A dynamic rarity system that determines the rarity of a badge based on how often it has been granted.
+        A default setup might look something like this:
+        Legendary, 1.0%, gold
+        Epic, 5.0%, purple
+        Rare, 15.0%, blue
+        Common, 100%, gray
+    """
+
+    name = models.CharField(
+        max_length=50,
+        unique=True,
+        help_text="The unique name or label for this rarity of badge, e.g. 'Legendary'",
+    )
+    percentile = models.FloatField(
+        unique=True,
+        help_text="A number from 0.1% (or less) to 100.0% indicating the rarity of the badge.  For example: \
+            10.0% would mean badges that <10.0% of users have earned will be assigned this rarity, unless \
+            it falls into the next more rare category (such as 5.0%).  A value of 100 will catch all badges."
+    )
+    color = models.CharField(
+        max_length=50,
+        default='gray',
+        help_text='An HTML color name "gray" or hex value in the format: "#7b7b7b;"',
+    )
+    fa_icon = models.CharField(
+        max_length=50,
+        default='fa-certificate',
+        help_text='A font-awesome icon to represent this rarity, should begin with "fa-".  See here for \
+            options: "https://faicons.com"'
+    )
+
+    objects = BadgeRarityManager()
+
+    class Meta:
+        ordering = ['percentile']
+        verbose_name = "Badge Rarity"
+        verbose_name_plural = "Badge Rarities"
+
+    def __str__(self):
+        return self.name
+
+    def get_icon_html(self):
+        icon = "<i class='fa {} fa-fw rarity-{}' title='{}' style='color:{}' aria-hidden='true'></i>".format(
+            self.fa_icon,
+            self.name,
+            self.name,
+            self.color,
+        )
+        print(icon)
+        aria_span = "<span class='sr-only'>{}</span>".format(self.name)
+        return icon + aria_span
+
 
 class BadgeType(models.Model):
     name = models.CharField(max_length=50, unique=True)
@@ -60,16 +132,15 @@ class BadgeManager(models.Manager):
             obj.pk for obj in self.get_queryset().get_active()
             if Prereq.objects.all_conditions_met(obj, user, False)
             # if not obj.badge_type.manual_only and Prereq.objects.all_conditions_met(obj, user)
-            ]
+        ]
         return self.filter(pk__in=pk_met_list)
 
     def all_manually_granted(self):
-        #return None
         # build a list of pk's for badges that have no prerequisites.
         pk_manual_list = [
             obj.pk for obj in self.get_queryset()
             if Prereq.objects.all_parent(obj).count() == 0
-            ]
+        ]
         return self.filter(pk__in=pk_manual_list).order_by('name')
 
 
@@ -105,13 +176,32 @@ class Badge(models.Model, IsAPrereqMixin):
         return Prereq.objects.all_parent(self)
 
     def get_absolute_url(self):
-        return reverse('badges:list')
+        return reverse('badges:badge_detail', kwargs={'badge_id': self.id})
 
     def get_icon_url(self):
         if self.icon and hasattr(self.icon, 'url'):
             return self.icon.url
+
+        if config.hs_default_icon:
+            icon = get_object_or_404(ImageResource, pk=config.hs_default_icon)
+            return icon.image.url
+        return static('img/default_icon.png')
+
+    # @cached_property
+    def fraction_of_active_users_granted_this(self):
+        num_assertions = BadgeAssertion.objects.filter(badge=self).count()
+        return num_assertions / User.objects.filter(is_active=True).count()
+
+    def percent_of_active_users_granted_this(self):
+        return self.fraction_of_active_users_granted_this() * 100
+
+    def get_rarity_icon(self):
+        percentile = self.percent_of_active_users_granted_this()
+        badge_rarity = BadgeRarity.objects.get_rarity(percentile)
+        if badge_rarity:
+            return badge_rarity.get_icon_html()
         else:
-            return static('img/default_icon.png')
+            return ""
 
     # # to help with the prerequisite choices!
     # @staticmethod
@@ -166,9 +256,23 @@ class BadgeAssertionManager(models.Manager):
         This only works in a postgresql database
         https://docs.djangoproject.com/en/1.10/ref/models/querysets/#distinct
         """
-        if settings.DATABASES['default']['ENGINE'] == 'django.db.backends.postgresql_psycopg2':
+
+        db_engine = settings.DATABASES['default']['ENGINE']
+        if db_engine == 'django.db.backends.postgresql_psycopg2' or db_engine == 'django.db.backends.postgresql':
             return self.get_queryset(False).get_user(user).order_by('badge_id').distinct('badge')
+        else:
+            print("Database is {}".format(db_engine))
+            print("Multiple badge assertions for a use will be duplicated instead of combined.")
+            print("Only django.db.backends.postgresql_psycopg2' supports distinct() method.")
         return self.get_queryset(False).get_user(user)
+
+    def badge_assertions_dict_items(self, user):
+        earned_assertions = self.all_for_user_distinct(user)
+        assertion_dict = defaultdict(list)
+        for assertion in earned_assertions:
+            assertion_dict[assertion.badge.badge_type].append(assertion)
+
+        return assertion_dict.items()
 
     def num_assertions(self, user, badge, active_semester_only=False):
         qs = self.all_for_user_badge(user, badge, active_semester_only)
@@ -207,6 +311,9 @@ class BadgeAssertionManager(models.Manager):
             # if the badge doesn't already exist
             if not self.all_for_user_badge(user, badge, False):
                 self.create_assertion(user, badge, None, transfer)
+                # if a new badge has been granted, then check again recursively.
+                # maybe this should be celeried?
+                self.check_for_new_assertions(user, transfer)
 
     def get_by_type_for_user(self, user):
         self.check_for_new_assertions(user)
@@ -217,7 +324,7 @@ class BadgeAssertionManager(models.Manager):
                 'badge_type': t,
                 'list': qs.get_type(t)
             } for t in types
-            ]
+        ]
         return by_type
 
     def calculate_xp(self, user):
@@ -282,11 +389,6 @@ class BadgeAssertion(models.Model):
     def get_duplicate_assertions(self):
         """A qs of all assertions of this badge for this user"""
         return BadgeAssertion.objects.all_for_user_badge(self.user, self.badge, False)
-
-
-from django.dispatch import receiver
-from django.db.models.signals import post_save
-from notifications.signals import notify
 
 
 # only receive signals from BadgeAssertion model

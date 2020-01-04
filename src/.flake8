@@ -1,0 +1,17 @@
+[flake8]
+exclude = 
+    migrations,
+    __pycache__,
+    manage.py,
+    hackerspace_online/settings/*
+#max-complexity = 12
+max-line-length = 120
+
+# Example for ignoring specifics:
+# E126: continuation line over-indented for hanging indent
+# W504 line break after binary operator
+# W503 line break before binary operator
+# E126 continuation line over-indented for hanging indent
+ignore = W291, E216, W504, W503, E126
+
+
