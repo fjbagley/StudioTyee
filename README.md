@@ -122,3 +122,4 @@ web_1     | Quit the server with CONTROL-C.
 8. Go to your fork of the repository.
 9. Select your recently pushed branch and create a pull request.
 10. Complete pull request.
+*
